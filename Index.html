@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="om">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#075b35">
+  <title>Dhabbata Abuseeyda</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><img src="images/logo.png" alt="Dhabbata Abuseeyda"><b>Dhabbata A.</b></div>
+  <div class="search"><span>🔎</span><input id="searchInput" placeholder="Barbaadi..." autocomplete="off"></div>
+  <div class="top-actions"><button id="homeBtn">⌂</button><button id="logoutBtn" hidden>↪</button><button id="loginBtn">👤</button></div>
+</header>
+
+<section class="profile-card">
+  <div class="cover"></div>
+  <div class="profile-body">
+    <img class="avatar" src="images/logo.png" alt="Profile">
+    <div class="profile-row">
+      <div>
+        <h1>Dhabbata Abdeta Abuseeyda</h1>
+        <p>🌍 Hawaasa • Tajaa'ila • Misooma</p>
+      </div>
+      <div class="profile-buttons"><button id="followBtn">➕ Follow</button><button class="light" onclick="alert('Message feature: itti aansee dabali.')">💬 Message</button></div>
+    </div>
+  </div>
+</section>
+
+<main class="feed">
+  <section class="section-head"><h2>Stories</h2><button id="storyOpen">＋ Story</button></section>
+  <div class="stories" id="stories"></div>
+
+  <section class="composer card">
+    <div class="composer-top"><img id="currentAvatar" src="images/logo.png" alt="user"><textarea id="postText" rows="2" placeholder="Maalitu sammuu kee keessa jira?"></textarea></div>
+    <div id="postPreview"></div>
+    <div class="composer-actions">
+      <label class="media-label">📷 Photo/Video<input id="postFile" type="file" accept="image/*,video/*"></label>
+      <button id="postBtn">📤 Post</button>
+    </div>
+    <p id="postStatus" class="status"></p>
+  </section>
+
+  <section id="posts"></section>
+</main>
+
+<div class="modal" id="authModal"><div class="modal-box"><button class="x" data-close="authModal">×</button><h2 id="authTitle">Seeni</h2><input id="authName" placeholder="Maqaa kee" class="auth-name"><input id="authEmail" type="email" placeholder="Email"><input id="authPassword" type="password" placeholder="Password (6+)" minlength="6"><button id="authSubmit" class="primary">Seeni</button><button id="switchAuth" class="linkbtn">Akaakuu galmee jijjiiri</button><p id="authStatus" class="status"></p></div></div>
+
+<div class="modal" id="storyModal"><div class="modal-box"><button class="x" data-close="storyModal">×</button><h2>Story haaraa</h2><textarea id="storyText" rows="3" placeholder="Story kee barreessi..."></textarea><label class="upload-box">🖼️ Suuraa filadhu<input id="storyFile" type="file" accept="image/*"></label><div id="storyPreview"></div><button id="storyBtn" class="primary">📤 Publish Story</button><p id="storyStatus" class="status"></p></div></div>
+
+<div class="viewer" id="storyViewer"><button class="viewer-x" id="viewerClose">×</button><img id="viewerImage" alt="Story"><div id="viewerText"></div></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-app.js";
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-auth.js";
+import { getFirestore, collection, addDoc, doc, setDoc, getDoc, deleteDoc, updateDoc, arrayUnion, arrayRemove, query, orderBy, onSnapshot, serverTimestamp, limit } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-firestore.js";
+import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/12.2.1/firebase-storage.js";
+import { firebaseConfig } from "./firebase-config.js";
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const storage = getStorage(app);
+
+let currentUser = null;
+let authMode = "login";
+let unsubscribePosts = null;
+let unsubscribeStories = null;
+let selectedPostFile = null;
+let selectedStoryFile = null;
+
+const $ = id => document.getElementById(id);
+
+function openModal(id){ $(id).classList.add("show"); }
+function closeModal(id){ $(id).classList.remove("show"); }
+function esc(s=""){ return s.replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[c])); }
+function setStatus(id,msg,error=false){ $(id).textContent=msg; $(id).className="status"+(error?" error":""); }
+function requireLogin(){ if(!currentUser){ openModal("authModal"); setStatus("authStatus","Mee dura seeni ykn galmaa'i.",true); return false;} return true; }
+function userName(){ return currentUser?.displayName || currentUser?.email?.split("@")[0] || "User"; }
+function userPhoto(){ return currentUser?.photoURL || "images/logo.png"; }
+
+function resetAuthForm(){ $("authName").value=""; $("authEmail").value=""; $("authPassword").value=""; setStatus("authStatus",""); }
+function renderAuth(){ $("authTitle").textContent=authMode==="login"?"Seeni":"Galmaa'i"; $("authSubmit").textContent=authMode==="login"?"Seeni":"Galmaa'i"; $("authName").style.display=authMode==="login"?"none":"block"; }
+
+$("loginBtn").onclick=()=>{authMode="login";renderAuth();openModal("authModal");};
+$("logoutBtn").onclick=()=>signOut(auth);
+$("switchAuth").onclick=()=>{authMode=authMode==="login"?"signup":"login";renderAuth();setStatus("authStatus","");};
+
+document.querySelectorAll("[data-close]").forEach(b=>b.onclick=()=>closeModal(b.dataset.close));
+
+$("authSubmit").onclick=async()=>{
+  const email=$("authEmail").value.trim(), password=$("authPassword").value, name=$("authName").value.trim();
+  if(!email||password.length<6||(authMode==="signup"&&!name)){setStatus("authStatus","Odeeffannoo guutuu galchi.",true);return;}
+  try{
+    setStatus("authStatus","Mee xiqqoo eegi...");
+    if(authMode==="signup"){
+      const cred=await createUserWithEmailAndPassword(auth,email,password);
+      await updateProfile(cred.user,{displayName:name});
+      await setDoc(doc(db,"users",cred.user.uid),{uid:cred.user.uid,name,email,createdAt:serverTimestamp()},{merge:true});
+    } else await signInWithEmailAndPassword(auth,email,password);
+    closeModal("authModal"); resetAuthForm();
+  }catch(e){setStatus("authStatus",e.message,true);}
+};
+
+onAuthStateChanged(auth, async user=>{
+  currentUser=user;
+  $("loginBtn").hidden=!!user;
+  $("logoutBtn").hidden=!user;
+  $("currentAvatar").src=userPhoto();
+  if(user){
+    await setDoc(doc(db,"users",user.uid),{uid:user.uid,name:userName(),email:user.email||"",updatedAt:serverTimestamp()},{merge:true});
+  }
+  listenStories(); listenPosts();
+});
+
+function listenStories(){
+  if(unsubscribeStories) unsubscribeStories();
+  const q=query(collection(db,"stories"),orderBy("createdAt","desc"),limit(20));
+  unsubscribeStories=onSnapshot(q,snap=>{ const arr=[]; snap.forEach(d=>arr.push({id:d.id,...d.data()})); renderStories(arr); },e=>console.error(e));
+}
+function renderStories(arr){
+  $("stories").innerHTML=`<div class="story create-story" id="createStoryCard"><div class="plus">+</div><b>Create Story</b></div>`;
+  $("createStoryCard").onclick=()=>{if(requireLogin())openModal("storyModal");};
+  arr.forEach(s=>{
+    const el=document.createElement("div"); el.className="story user-story"; el.style.backgroundImage=`url("${s.imageUrl||"images/story1.jpg"}")`;
+    el.innerHTML=`<div class="story-shade"><b>👤 ${esc(s.userName||"User")}</b><span>${esc(s.text||"")}</span>${currentUser?.uid===s.uid?`<button class="delete-story" data-id="${s.id}">🗑️</button>`:""}</div>`;
+    el.onclick=()=>openStory(s);
+    el.querySelector(".delete-story")?.addEventListener("click",async ev=>{ev.stopPropagation();await deleteStory(s);});
+    $("stories").appendChild(el);
+  });
+}
+function openStory(s){$("viewerImage").src=s.imageUrl||"images/story1.jpg";$("viewerText").textContent=s.text||"";$("storyViewer").classList.add("show");}
+$("viewerClose").onclick=()=>$("storyViewer").classList.remove("show");
+
+$("storyOpen").onclick=()=>{if(requireLogin())openModal("storyModal");};
+$("storyFile").onchange=e=>{selectedStoryFile=e.target.files[0]||null;if(selectedStoryFile){const u=URL.createObjectURL(selectedStoryFile);$("storyPreview").innerHTML=`<img class="preview" src="${u}">`;}};
+
+async function uploadFile(file,path){const r=ref(storage,path);await uploadBytes(r,file);return await getDownloadURL(r);}
+
+$("storyBtn").onclick=async()=>{
+  if(!requireLogin())return;
+  const text=$("storyText").value.trim();
+  if(!text&&!selectedStoryFile){setStatus("storyStatus","Text ykn suuraa galchi.",true);return;}
+  try{
+    setStatus("storyStatus","Story olkaa'amaa jira...");
+    let imageUrl="";
+    if(selectedStoryFile) imageUrl=await uploadFile(selectedStoryFile,`stories/${currentUser.uid}/${Date.now()}-${selectedStoryFile.name}`);
+    await addDoc(collection(db,"stories"),{uid:currentUser.uid,userName:userName(),text,imageUrl,createdAt:serverTimestamp()});
+    $("storyText").value="";$("storyFile").value="";$("storyPreview").innerHTML="";selectedStoryFile=null;closeModal("storyModal");
+  }catch(e){setStatus("storyStatus",e.message,true);}
+};
+
+async function deleteStory(s){
+  if(!currentUser||currentUser.uid!==s.uid)return;
+  if(!confirm("Story kana haquu barbaaddaa?"))return;
+  try{await deleteDoc(doc(db,"stories",s.id));}catch(e){alert(e.message);}
+}
+
+$("postFile").onchange=e=>{selectedPostFile=e.target.files[0]||null;const c=$("postPreview");c.innerHTML="";if(selectedPostFile){const u=URL.createObjectURL(selectedPostFile);c.innerHTML=selectedPostFile.type.startsWith("video/")?`<video class="preview" controls src="${u}"></video>`:`<img class="preview" src="${u}">`;}};
+
+$("postBtn").onclick=async()=>{
+  if(!requireLogin())return;
+  const text=$("postText").value.trim();
+  if(!text&&!selectedPostFile){setStatus("postStatus","Text ykn Photo/Video galchi.",true);return;}
+  try{
+    setStatus("postStatus","Post olkaa'amaa jira...");
+    let mediaUrl="",mediaType="";
+    if(selectedPostFile){mediaType=selectedPostFile.type.startsWith("video/")?"video":"image";mediaUrl=await uploadFile(selectedPostFile,`posts/${currentUser.uid}/${Date.now()}-${selectedPostFile.name}`);}
+    await addDoc(collection(db,"posts"),{uid:currentUser.uid,userName:userName(),userPhoto:userPhoto(),text,mediaUrl,mediaType,likes:[],comments:[],createdAt:serverTimestamp()});
+    $("postText").value="";$("postFile").value="";$("postPreview").innerHTML="";selectedPostFile=null;setStatus("postStatus","Post kee olkaa'ameera.");setTimeout(()=>setStatus("postStatus",""),2000);
+  }catch(e){setStatus("postStatus",e.message,true);}
+};
+
+function listenPosts(){
+  if(unsubscribePosts) unsubscribePosts();
+  const q=query(collection(db,"posts"),orderBy("createdAt","desc"),limit(50));
+  unsubscribePosts=onSnapshot(q,snap=>{const arr=[];snap.forEach(d=>arr.push({id:d.id,...d.data()}));renderPosts(arr);},e=>console.error(e));
+}
+function timeText(ts){if(!ts?.toDate)return"Amma";return ts.toDate().toLocaleString("om-ET",{dateStyle:"medium",timeStyle:"short"});}
+function renderPosts(arr){
+  const term=$("searchInput").value.trim().toLowerCase();
+  $("posts").innerHTML="";
+  arr.filter(p=>(p.text||"").toLowerCase().includes(term)||(p.userName||"").toLowerCase().includes(term)).forEach(p=>{
+    const el=document.createElement("article");el.className="post card";
+    const liked=(p.likes||[]).includes(currentUser?.uid);const comments=p.comments||[];
+    let media="";if(p.mediaUrl)media=p.mediaType==="video"?`<video class="post-media" controls src="${p.mediaUrl}"></video>`:`<img class="post-media" src="${p.mediaUrl}" alt="post media">`;
+    el.innerHTML=`<div class="post-head"><img src="${esc(p.userPhoto||"images/logo.png")}"><div><b>${esc(p.userName||"User")}</b><small>${timeText(p.createdAt)}</small></div>${currentUser?.uid===p.uid?`<button class="more" title="Delete">🗑️</button>`:""}</div><div class="post-text">${esc(p.text||"")}</div>${media}<div class="stats">❤️ ${(p.likes||[]).length} &nbsp; • &nbsp; 💬 ${comments.length}</div><div class="post-actions"><button class="${liked?"liked":""}" data-like>❤️ Like</button><button data-comment>💬 Comment</button><button data-share>↗️ Share</button></div><div class="comments">${comments.map(c=>`<div><b>${esc(c.name||"User")}</b> ${esc(c.text||"")}</div>`).join("")}</div>`;
+    el.querySelector("[data-like]").onclick=()=>toggleLike(p);
+    el.querySelector("[data-comment]").onclick=()=>addComment(p);
+    el.querySelector("[data-share]").onclick=()=>sharePost(p);
+    el.querySelector(".more")?.addEventListener("click",()=>deletePost(p));
+    $("posts").appendChild(el);
+  });
+}
+
+async function toggleLike(p){if(!requireLogin())return;const liked=(p.likes||[]).includes(currentUser.uid);await updateDoc(doc(db,"posts",p.id),{likes:liked?arrayRemove(currentUser.uid):arrayUnion(currentUser.uid)});}
+async function addComment(p){if(!requireLogin())return;const text=prompt("Comment kee barreessi:");if(!text?.trim())return;await updateDoc(doc(db,"posts",p.id),{comments:arrayUnion({uid:currentUser.uid,name:userName(),text:text.trim()})});}
+async function sharePost(p){const text=`${p.userName}: ${p.text||"Post"}`;if(navigator.share)await navigator.share({title:"Dhabbata Abuseeyda",text,url:location.href});else{await navigator.clipboard.writeText(text+"\n"+location.href);alert("Link copy ta'eera.");}}
+async function deletePost(p){if(!currentUser||currentUser.uid!==p.uid)return;if(!confirm("Post kana haquu barbaaddaa?"))return;await deleteDoc(doc(db,"posts",p.id));}
+
+$("searchInput").oninput=()=>listenPosts();
+$("followBtn").onclick=()=>alert("Follow system: user-to-user followers itti aansee dabali.");
+$("homeBtn").onclick=()=>scrollTo({top:0,behavior:"smooth"});
+renderAuth();
+</script>
+</body>
+                                                                                                    </html>
